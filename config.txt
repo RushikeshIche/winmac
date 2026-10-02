@@ -1,0 +1,4 @@
+# WinMac Application Whitelist
+# Add the absolute paths of the applications you want to customize below.
+# Example: C:\Windows\System32\notepad.exe
+
