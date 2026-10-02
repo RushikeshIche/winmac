@@ -1,0 +1,33 @@
+plan.md
+old.md
+run.md
+
+# CMake
+build/
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+Testing/
+Makefile
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+
+# Visual Studio / MSVC
+.vs/
+out/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# IDEs
+.vscode/
+.idea/
+
+# Compiled files
+*.exe
+*.dll
+*.lib
+*.pdb
+*.ilk
