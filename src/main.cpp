@@ -1,6 +1,26 @@
 #include <windows.h>
 #include <windowsx.h>
 
+static int hoveredButton = 0; // 0=none, 1=red, 2=yellow, 3=green
+static int pressedButton = 0; // 0=none, 1=red, 2=yellow, 3=green
+
+// Helper to centralize button position math
+void GetButtonRects(HWND hwnd, RECT* red, RECT* yellow, RECT* green) {
+    RECT rc;
+    GetClientRect(hwnd, &rc);
+    int rightEdge = rc.right;
+    int size = 13;
+    int yTop = 10;
+    
+    int redLeft = rightEdge - 28;
+    int yellowLeft = redLeft - 20;
+    int greenLeft = yellowLeft - 20;
+    
+    SetRect(red, redLeft, yTop, redLeft + size, yTop + size);
+    SetRect(yellow, yellowLeft, yTop, yellowLeft + size, yTop + size);
+    SetRect(green, greenLeft, yTop, greenLeft + size, yTop + size);
+}
+
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
         case WM_NCHITTEST: {
@@ -11,12 +31,97 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
                 pt.y = GET_Y_LPARAM(lParam);
                 ScreenToClient(hwnd, &pt);
                 
-                // If mouse is in our custom title bar, pretend it's the native caption bar
+                RECT rc;
+                GetClientRect(hwnd, &rc);
+                
+                int borderX = GetSystemMetrics(SM_CXSIZEFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
+                int borderY = GetSystemMetrics(SM_CYSIZEFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER);
+
+                bool isLeft = pt.x < borderX;
+                bool isRight = pt.x >= (rc.right - borderX);
+                bool isTop = pt.y < borderY;
+                bool isBottom = pt.y >= (rc.bottom - borderY);
+
+                if (isTop && isLeft) return HTTOPLEFT;
+                if (isTop && isRight) return HTTOPRIGHT;
+                if (isBottom && isLeft) return HTBOTTOMLEFT;
+                if (isBottom && isRight) return HTBOTTOMRIGHT;
+                if (isLeft) return HTLEFT;
+                if (isRight) return HTRIGHT;
+                if (isTop) return HTTOP;
+                if (isBottom) return HTBOTTOM;
+                
+                // If mouse is over buttons, handle it as client area for hover events
+                RECT red, yellow, green;
+                GetButtonRects(hwnd, &red, &yellow, &green);
+                if (PtInRect(&red, pt) || PtInRect(&yellow, pt) || PtInRect(&green, pt)) {
+                    return HTCLIENT;
+                }
+                
+                // If mouse is in our custom title bar but not on buttons, pretend it's the native caption
                 if (pt.y >= 0 && pt.y < 32) {
                     return HTCAPTION;
                 }
             }
             return hit;
+        }
+        case WM_MOUSEMOVE: {
+            POINT pt;
+            pt.x = GET_X_LPARAM(lParam);
+            pt.y = GET_Y_LPARAM(lParam);
+            
+            RECT red, yellow, green;
+            GetButtonRects(hwnd, &red, &yellow, &green);
+            
+            int newHover = 0;
+            if (PtInRect(&red, pt)) newHover = 1;
+            else if (PtInRect(&yellow, pt)) newHover = 2;
+            else if (PtInRect(&green, pt)) newHover = 3;
+            
+            if (newHover != hoveredButton) {
+                hoveredButton = newHover;
+                
+                // Request WM_MOUSELEAVE to know when the mouse leaves the window
+                TRACKMOUSEEVENT tme = {};
+                tme.cbSize = sizeof(tme);
+                tme.dwFlags = TME_LEAVE;
+                tme.hwndTrack = hwnd;
+                TrackMouseEvent(&tme);
+                
+                InvalidateRect(hwnd, NULL, FALSE); // Force redraw for hover colors
+            }
+            break;
+        }
+        case WM_MOUSELEAVE: {
+            hoveredButton = 0;
+            pressedButton = 0;
+            InvalidateRect(hwnd, NULL, FALSE);
+            break;
+        }
+        case WM_LBUTTONDOWN: {
+            if (hoveredButton != 0) {
+                pressedButton = hoveredButton;
+                InvalidateRect(hwnd, NULL, FALSE); // Redraw for pressed state
+            }
+            break;
+        }
+        case WM_LBUTTONUP: {
+            if (pressedButton != 0 && pressedButton == hoveredButton) {
+                // Execute button actions!
+                if (pressedButton == 1) { // Red / Close
+                    PostMessage(hwnd, WM_CLOSE, 0, 0);
+                } else if (pressedButton == 2) { // Yellow / Minimize
+                    ShowWindow(hwnd, SW_MINIMIZE);
+                } else if (pressedButton == 3) { // Green / Maximize-Restore
+                    WINDOWPLACEMENT wp = { sizeof(wp) };
+                    GetWindowPlacement(hwnd, &wp);
+                    if (wp.showCmd == SW_MAXIMIZE) ShowWindow(hwnd, SW_RESTORE);
+                    else ShowWindow(hwnd, SW_MAXIMIZE);
+                }
+            }
+            pressedButton = 0;
+            InvalidateRect(hwnd, NULL, FALSE);
+            break;
         }
         case WM_NCCALCSIZE: {
             if (wParam == TRUE) {
@@ -43,32 +148,29 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             FillRect(hdc, &titleBarRect, titleBarBrush);
             DeleteObject(titleBarBrush);
             
-            // Draw macOS traffic lights on the right side
+            // Draw macOS traffic lights
             HPEN oldPen = (HPEN)SelectObject(hdc, GetStockObject(NULL_PEN));
             
-            int rightEdge = titleBarRect.right;
-            int size = 13; // 13x13 bounding box often looks more symmetrical in GDI
-            int yTop = 10;
-            int yBottom = yTop + size;
-            
-            int redLeft = rightEdge - 28;
-            int yellowLeft = redLeft - 20;
-            int greenLeft = yellowLeft - 20;
+            RECT rRed, rYellow, rGreen;
+            GetButtonRects(hwnd, &rRed, &rYellow, &rGreen);
 
-            // Red button
-            HBRUSH redBrush = CreateSolidBrush(RGB(255, 95, 86));
+            // Red button (lighten if hovered, darken if pressed)
+            COLORREF cRed = (pressedButton == 1) ? RGB(200, 70, 60) : (hoveredButton == 1 ? RGB(255, 120, 110) : RGB(255, 95, 86));
+            HBRUSH redBrush = CreateSolidBrush(cRed);
             HBRUSH oldBrush = (HBRUSH)SelectObject(hdc, redBrush);
-            Ellipse(hdc, redLeft, yTop, redLeft + size, yBottom);
+            Ellipse(hdc, rRed.left, rRed.top, rRed.right, rRed.bottom);
             
             // Yellow button
-            HBRUSH yellowBrush = CreateSolidBrush(RGB(255, 189, 46));
+            COLORREF cYellow = (pressedButton == 2) ? RGB(200, 150, 30) : (hoveredButton == 2 ? RGB(255, 210, 80) : RGB(255, 189, 46));
+            HBRUSH yellowBrush = CreateSolidBrush(cYellow);
             SelectObject(hdc, yellowBrush);
-            Ellipse(hdc, yellowLeft, yTop, yellowLeft + size, yBottom);
+            Ellipse(hdc, rYellow.left, rYellow.top, rYellow.right, rYellow.bottom);
             
             // Green button
-            HBRUSH greenBrush = CreateSolidBrush(RGB(39, 201, 63));
+            COLORREF cGreen = (pressedButton == 3) ? RGB(30, 150, 45) : (hoveredButton == 3 ? RGB(70, 230, 90) : RGB(39, 201, 63));
+            HBRUSH greenBrush = CreateSolidBrush(cGreen);
             SelectObject(hdc, greenBrush);
-            Ellipse(hdc, greenLeft, yTop, greenLeft + size, yBottom);
+            Ellipse(hdc, rGreen.left, rGreen.top, rGreen.right, rGreen.bottom);
             
             // Cleanup GDI objects
             SelectObject(hdc, oldBrush);
@@ -88,6 +190,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     const wchar_t CLASS_NAME[] = L"WinMacWindowClass";
 
     WNDCLASS wc = { };
+    wc.style         = CS_HREDRAW | CS_VREDRAW;
     wc.lpfnWndProc   = WindowProc;
     wc.hInstance     = hInstance;
     wc.lpszClassName = CLASS_NAME;
@@ -96,15 +199,15 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     RegisterClass(&wc);
 
     HWND hwnd = CreateWindowEx(
-        0,                              // Optional window styles
-        CLASS_NAME,                     // Window class
-        L"WinMac Test Window",          // Window text
-        WS_OVERLAPPEDWINDOW,            // Window style
-        CW_USEDEFAULT, CW_USEDEFAULT, 800, 600, // Size and position
-        NULL,                           // Parent window
-        NULL,                           // Menu
-        hInstance,                      // Instance handle
-        NULL                            // Additional application data
+        0,
+        CLASS_NAME,
+        L"WinMac Test Window",
+        WS_OVERLAPPEDWINDOW,
+        CW_USEDEFAULT, CW_USEDEFAULT, 800, 600,
+        NULL,
+        NULL,
+        hInstance,
+        NULL
     );
 
     if (hwnd == NULL) {
