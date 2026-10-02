@@ -2,6 +2,12 @@
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
+        case WM_NCCALCSIZE: {
+            if (wParam == TRUE) {
+                return 0;
+            }
+            break;
+        }
         case WM_DESTROY:
             PostQuitMessage(0);
             return 0;
